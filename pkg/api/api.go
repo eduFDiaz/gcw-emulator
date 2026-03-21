@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/gofiber/fiber/v2"
 	"github.com/lemonberrylabs/gcw-emulator/pkg/ast"
 	"github.com/lemonberrylabs/gcw-emulator/pkg/parser"
@@ -516,64 +517,171 @@ func (s *Server) sendCallback(c *fiber.Ctx) error {
 
 var validWorkflowID = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
 
-// WatchDir loads all .yaml and .json workflow files from the given directory
-// and deploys them as workflows. File name (sans extension) becomes the workflow ID.
+// WatchDir loads all workflow files from the given directory and starts a
+// background file watcher that hot-reloads on add/modify/delete.
 func (s *Server) WatchDir(dir, project, location string) error {
-	entries, err := os.ReadDir(dir)
+	parent := fmt.Sprintf("projects/%s/locations/%s", project, location)
+
+	// Initial load
+	loaded, err := s.loadDir(dir, parent)
 	if err != nil {
-		return fmt.Errorf("reading workflows directory: %w", err)
+		return err
+	}
+	log.Printf("Loaded %d workflow(s) from %s", loaded, dir)
+
+	// Start background watcher
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return fmt.Errorf("creating file watcher: %w", err)
+	}
+	if err := watcher.Add(dir); err != nil {
+		watcher.Close()
+		return fmt.Errorf("watching directory %s: %w", dir, err)
 	}
 
-	parent := fmt.Sprintf("projects/%s/locations/%s", project, location)
-	loaded := 0
+	go s.watchLoop(watcher, dir, parent)
+	return nil
+}
 
+// loadDir does a one-shot load of all workflow files in dir.
+func (s *Server) loadDir(dir, parent string) (int, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0, fmt.Errorf("reading workflows directory: %w", err)
+	}
+
+	loaded := 0
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
-		name := entry.Name()
-		ext := filepath.Ext(name)
-		if ext != ".yaml" && ext != ".yml" && ext != ".json" {
-			continue
+		if s.deployFile(filepath.Join(dir, entry.Name()), parent) {
+			loaded++
 		}
+	}
+	return loaded, nil
+}
 
-		base := strings.TrimSuffix(name, ext)
-		workflowID := strings.ToLower(base)
+// watchLoop processes fsnotify events with debouncing.
+func (s *Server) watchLoop(watcher *fsnotify.Watcher, dir, parent string) {
+	defer watcher.Close()
 
-		if workflowID != base {
-			log.Printf("Warning: lowercased workflow ID %q (from file %q)", workflowID, name)
+	// Debounce: collect events for 200ms before processing
+	const debounce = 200 * time.Millisecond
+	timer := time.NewTimer(debounce)
+	timer.Stop()
+	pending := make(map[string]fsnotify.Op)
+
+	for {
+		select {
+		case event, ok := <-watcher.Events:
+			if !ok {
+				return
+			}
+			pending[event.Name] = event.Op
+			timer.Reset(debounce)
+
+		case err, ok := <-watcher.Errors:
+			if !ok {
+				return
+			}
+			log.Printf("[ERROR] File watcher error: %v", err)
+
+		case <-timer.C:
+			for path, op := range pending {
+				s.handleFileEvent(path, op, parent)
+			}
+			pending = make(map[string]fsnotify.Op)
 		}
+	}
+}
 
-		if !validWorkflowID.MatchString(workflowID) || len(workflowID) > 128 {
-			log.Printf("Warning: skipping file %q — invalid workflow ID %q", name, workflowID)
-			continue
-		}
-
-		data, err := os.ReadFile(filepath.Join(dir, name))
-		if err != nil {
-			log.Printf("Warning: could not read %q: %v", name, err)
-			continue
-		}
-
-		wfAST, err := parser.Parse(data)
-		if err != nil {
-			log.Printf("Warning: could not parse %q: %v", name, err)
-			continue
-		}
-
-		wf, err := s.store.CreateWorkflow(parent, workflowID, string(data), "")
-		if err != nil {
-			log.Printf("Warning: could not deploy %q: %v", name, err)
-			continue
-		}
-
-		s.parsed[wf.Name] = wfAST
-		loaded++
-		log.Printf("Loaded workflow %q from %s", workflowID, name)
+// handleFileEvent processes a single file change event.
+func (s *Server) handleFileEvent(path string, op fsnotify.Op, parent string) {
+	name := filepath.Base(path)
+	ext := filepath.Ext(name)
+	if ext != ".yaml" && ext != ".yml" && ext != ".json" {
+		return
 	}
 
-	log.Printf("Loaded %d workflow(s) from %s", loaded, dir)
-	return nil
+	workflowID := workflowIDFromFilename(name)
+	if workflowID == "" {
+		return
+	}
+	wfName := parent + "/workflows/" + workflowID
+
+	// File removed
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		log.Printf("[DEBUG] File deleted: %s — removing workflow %q", name, workflowID)
+		if err := s.store.DeleteWorkflow(wfName); err != nil {
+			log.Printf("Warning: could not delete workflow %q: %v", workflowID, err)
+		}
+		delete(s.parsed, wfName)
+		return
+	}
+
+	// File added or modified
+	log.Printf("[DEBUG] File changed: %s — reloading workflow %q", name, workflowID)
+	s.deployFile(path, parent)
+}
+
+// deployFile reads, parses, and deploys a single workflow file. Returns true on success.
+func (s *Server) deployFile(path, parent string) bool {
+	name := filepath.Base(path)
+	ext := filepath.Ext(name)
+	if ext != ".yaml" && ext != ".yml" && ext != ".json" {
+		return false
+	}
+
+	workflowID := workflowIDFromFilename(name)
+	if workflowID == "" {
+		log.Printf("Warning: skipping file %q — invalid workflow ID", name)
+		return false
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		log.Printf("Warning: could not read %q: %v", name, err)
+		return false
+	}
+
+	wfAST, err := parser.Parse(data)
+	if err != nil {
+		log.Printf("Warning: could not parse %q: %v", name, err)
+		return false
+	}
+
+	wfName := parent + "/workflows/" + workflowID
+
+	// Try update first (file may already be deployed), fall back to create
+	wf, err := s.store.UpdateWorkflow(wfName, string(data), "")
+	if err != nil {
+		wf, err = s.store.CreateWorkflow(parent, workflowID, string(data), "")
+		if err != nil {
+			log.Printf("Warning: could not deploy %q: %v", name, err)
+			return false
+		}
+	}
+
+	s.parsed[wf.Name] = wfAST
+	log.Printf("Loaded workflow %q from %s", workflowID, name)
+	return true
+}
+
+// workflowIDFromFilename extracts and validates a workflow ID from a filename.
+func workflowIDFromFilename(name string) string {
+	ext := filepath.Ext(name)
+	base := strings.TrimSuffix(name, ext)
+	workflowID := strings.ToLower(base)
+
+	if workflowID != base {
+		log.Printf("Warning: lowercased workflow ID %q (from file %q)", workflowID, name)
+	}
+
+	if !validWorkflowID.MatchString(workflowID) || len(workflowID) > 128 {
+		return ""
+	}
+	return workflowID
 }
 
 // --- Helpers ---
