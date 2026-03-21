@@ -10,7 +10,6 @@ import (
 	"net"
 	"net/http"
 	"strings"
-	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -261,7 +260,7 @@ func (s *Server) runExecution(execName string, wfAST *ast.Workflow, args types.V
 	log.Printf("[DEBUG] Starting execution: %s", execName)
 
 	funcs := stdlib.NewRegistry()
-	funcs.RegisterHTTP(&http.Client{Timeout: 30 * time.Second})
+	funcs.RegisterHTTP(&http.Client{Timeout: stdlib.DefaultHTTPTimeout})
 	funcs.RegisterWorkflowExecution(&grpcStoreAdapter{s.store}, s.parsed, s.childExecutor())
 
 	engine := runtime.NewEngine(wfAST, funcs)
@@ -286,7 +285,7 @@ func (s *Server) runExecution(execName string, wfAST *ast.Workflow, args types.V
 func (s *Server) childExecutor() stdlib.ChildExecutor {
 	return func(wfAST *ast.Workflow, args types.Value) (types.Value, error) {
 		funcs := stdlib.NewRegistry()
-		funcs.RegisterHTTP(&http.Client{Timeout: 30 * time.Second})
+		funcs.RegisterHTTP(&http.Client{Timeout: stdlib.DefaultHTTPTimeout})
 		funcs.RegisterWorkflowExecution(&grpcStoreAdapter{s.store}, s.parsed, s.childExecutor())
 
 		engine := runtime.NewEngine(wfAST, funcs)
