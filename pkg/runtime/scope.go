@@ -2,6 +2,7 @@
 package runtime
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -145,6 +146,7 @@ func (s *VariableScope) Exists(name string) bool {
 
 // ScopeAdapter adapts a VariableScope to implement the expr.Scope interface.
 type ScopeAdapter struct {
+	ctx     context.Context
 	scope   *VariableScope
 	funcMap FunctionRegistry
 }
@@ -152,12 +154,12 @@ type ScopeAdapter struct {
 // FunctionRegistry provides function lookup for expression evaluation.
 type FunctionRegistry interface {
 	// CallFunction calls a named function with the given arguments.
-	CallFunction(name string, args []types.Value) (types.Value, error)
+	CallFunction(ctx context.Context, name string, args []types.Value) (types.Value, error)
 }
 
 // NewScopeAdapter creates a scope adapter for expression evaluation.
-func NewScopeAdapter(scope *VariableScope, funcs FunctionRegistry) *ScopeAdapter {
-	return &ScopeAdapter{scope: scope, funcMap: funcs}
+func NewScopeAdapter(ctx context.Context, scope *VariableScope, funcs FunctionRegistry) *ScopeAdapter {
+	return &ScopeAdapter{ctx: ctx, scope: scope, funcMap: funcs}
 }
 
 // GetVariable implements expr.Scope.
@@ -168,19 +170,19 @@ func (a *ScopeAdapter) GetVariable(name string) (types.Value, error) {
 // CallFunction implements expr.Scope.
 func (a *ScopeAdapter) CallFunction(name string, args []types.Value) (types.Value, error) {
 	if a.funcMap != nil {
-		return a.funcMap.CallFunction(name, args)
+		return a.funcMap.CallFunction(a.ctx, name, args)
 	}
 	return types.Null, fmt.Errorf("function '%s' not found", name)
 }
 
 // EvalValue evaluates a parsed YAML value (which may contain ${} expressions)
 // within the given scope.
-func EvalValue(v interface{}, scope *VariableScope, funcs FunctionRegistry) (types.Value, error) {
+func EvalValue(ctx context.Context, v interface{}, scope *VariableScope, funcs FunctionRegistry) (types.Value, error) {
 	node, err := expr.ParseValue(v)
 	if err != nil {
 		return types.Null, err
 	}
-	adapter := NewScopeAdapter(scope, funcs)
+	adapter := NewScopeAdapter(ctx, scope, funcs)
 	return expr.Evaluate(node, adapter)
 }
 

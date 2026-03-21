@@ -1,6 +1,7 @@
 package stdlib
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -22,7 +23,7 @@ type WorkflowInfo struct {
 
 // ChildExecutor runs a child workflow synchronously and returns the result.
 // It is provided by the API layer which has access to the runtime engine.
-type ChildExecutor func(wfAST *ast.Workflow, args types.Value) (types.Value, error)
+type ChildExecutor func(ctx context.Context, wfAST *ast.Workflow, args types.Value) (types.Value, error)
 
 // RegisterWorkflowExecution registers the googleapis.workflowexecutions.v1
 // connector function for child workflow execution.
@@ -33,13 +34,14 @@ func (r *Registry) RegisterWorkflowExecution(
 ) {
 	r.Register(
 		"googleapis.workflowexecutions.v1.projects.locations.workflows.executions.run",
-		func(args []types.Value) (types.Value, error) {
-			return workflowExecutionsRun(args, store, parsedCache, executor)
+		func(ctx context.Context, args []types.Value) (types.Value, error) {
+			return workflowExecutionsRun(ctx, args, store, parsedCache, executor)
 		},
 	)
 }
 
 func workflowExecutionsRun(
+	ctx context.Context,
 	args []types.Value,
 	store WorkflowStore,
 	parsedCache map[string]*ast.Workflow,
@@ -90,7 +92,7 @@ func workflowExecutionsRun(
 
 	// Execute the child workflow synchronously
 	startTime := time.Now()
-	result, err := executor(wfAST, childArgs)
+	result, err := executor(ctx, wfAST, childArgs)
 	endTime := time.Now()
 
 	// Build the execution response object matching the GCW Execution resource

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -28,8 +29,8 @@ func (r *Registry) RegisterHTTP(client *http.Client) {
 	}
 
 	doRequest := func(method string) StdlibFunc {
-		return func(args []types.Value) (types.Value, error) {
-			return httpDoRequest(client, method, args)
+		return func(ctx context.Context, args []types.Value) (types.Value, error) {
+			return httpDoRequest(ctx, client, method, args)
 		}
 	}
 
@@ -38,7 +39,7 @@ func (r *Registry) RegisterHTTP(client *http.Client) {
 	r.Register("http.put", doRequest("PUT"))
 	r.Register("http.patch", doRequest("PATCH"))
 	r.Register("http.delete", doRequest("DELETE"))
-	r.Register("http.request", func(args []types.Value) (types.Value, error) {
+	r.Register("http.request", func(ctx context.Context, args []types.Value) (types.Value, error) {
 		// http.request uses the method from args
 		method := "GET"
 		if len(args) > 0 && args[0].Type() == types.TypeMap {
@@ -46,11 +47,11 @@ func (r *Registry) RegisterHTTP(client *http.Client) {
 				method = strings.ToUpper(m.AsString())
 			}
 		}
-		return httpDoRequest(client, method, args)
+		return httpDoRequest(ctx, client, method, args)
 	})
 }
 
-func httpDoRequest(client *http.Client, method string, args []types.Value) (types.Value, error) {
+func httpDoRequest(parentCtx context.Context, client *http.Client, method string, args []types.Value) (types.Value, error) {
 	if len(args) == 0 {
 		return types.Null, fmt.Errorf("http.%s requires arguments", strings.ToLower(method))
 	}
@@ -138,8 +139,8 @@ func httpDoRequest(client *http.Client, method string, args []types.Value) (type
 		requestURL = u.String()
 	}
 
-	// Create request
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	// Create request with timeout derived from parent context
+	ctx, cancel := context.WithTimeout(parentCtx, timeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, method, requestURL, body)
@@ -154,16 +155,26 @@ func httpDoRequest(client *http.Client, method string, args []types.Value) (type
 	}
 
 	// Execute request
+	log.Printf("[DEBUG] HTTP %s %s (timeout=%.1fs)", method, requestURL, timeout.Seconds())
+	start := time.Now()
 	resp, err := client.Do(req)
+	elapsed := time.Since(start)
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
+			log.Printf("[DEBUG] HTTP %s %s timed out after %s", method, requestURL, elapsed)
 			return types.Null, types.NewTimeoutError("HTTP request timed out")
+		}
+		if ctx.Err() == context.Canceled {
+			log.Printf("[DEBUG] HTTP %s %s cancelled after %s", method, requestURL, elapsed)
+		} else {
+			log.Printf("[DEBUG] HTTP %s %s failed after %s: %v", method, requestURL, elapsed, err)
 		}
 		// Use ConnectionFailedError for connection refusal/unreachable
 		return types.Null, types.NewConnectionFailedError(
 			fmt.Sprintf("HTTP request failed: %v", err))
 	}
 	defer resp.Body.Close()
+	log.Printf("[DEBUG] HTTP %s %s -> %d (%s)", method, requestURL, resp.StatusCode, elapsed)
 
 	// Read response body (with size limit)
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, MaxHTTPResponseSize+1))

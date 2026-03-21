@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -39,7 +40,10 @@ type Server struct {
 
 	store   *store.Store
 	parsed  map[string]*ast.Workflow
+
+	mu      sync.RWMutex
 	engines map[string]*runtime.Engine
+	cancels map[string]context.CancelFunc
 	grpc    *grpc.Server
 }
 
@@ -49,6 +53,7 @@ func New(s *store.Store) *Server {
 		store:   s,
 		parsed:  make(map[string]*ast.Workflow),
 		engines: make(map[string]*runtime.Engine),
+		cancels: make(map[string]context.CancelFunc),
 	}
 
 	gs := grpc.NewServer()
@@ -238,8 +243,15 @@ func (s *Server) ListExecutions(ctx context.Context, req *executionspb.ListExecu
 func (s *Server) CancelExecution(ctx context.Context, req *executionspb.CancelExecutionRequest) (*executionspb.Execution, error) {
 	name := req.GetName()
 
-	if engine, ok := s.engines[name]; ok {
+	s.mu.RLock()
+	engine, hasEngine := s.engines[name]
+	cancelFn, hasCancel := s.cancels[name]
+	s.mu.RUnlock()
+	if hasEngine {
 		engine.Cancel()
+	}
+	if hasCancel {
+		cancelFn()
 	}
 
 	err := s.store.CancelExecution(name)
@@ -264,12 +276,20 @@ func (s *Server) runExecution(execName string, wfAST *ast.Workflow, args types.V
 	funcs.RegisterWorkflowExecution(&grpcStoreAdapter{s.store}, s.parsed, s.childExecutor())
 
 	engine := runtime.NewEngine(wfAST, funcs)
-	s.engines[execName] = engine
+	ctx, cancel := context.WithCancel(context.Background())
 
-	ctx := context.Background()
+	s.mu.Lock()
+	s.engines[execName] = engine
+	s.cancels[execName] = cancel
+	s.mu.Unlock()
+
 	result, err := engine.Execute(ctx, args)
 
+	s.mu.Lock()
 	delete(s.engines, execName)
+	delete(s.cancels, execName)
+	s.mu.Unlock()
+	cancel()
 
 	if err != nil {
 		log.Printf("[ERROR] Execution %s failed: %v", execName, err)
@@ -283,13 +303,13 @@ func (s *Server) runExecution(execName string, wfAST *ast.Workflow, args types.V
 // childExecutor returns a ChildExecutor that creates a fresh engine for each
 // child workflow execution, with all stdlib functions registered.
 func (s *Server) childExecutor() stdlib.ChildExecutor {
-	return func(wfAST *ast.Workflow, args types.Value) (types.Value, error) {
+	return func(ctx context.Context, wfAST *ast.Workflow, args types.Value) (types.Value, error) {
 		funcs := stdlib.NewRegistry()
 		funcs.RegisterHTTP(&http.Client{Timeout: stdlib.DefaultHTTPTimeout})
 		funcs.RegisterWorkflowExecution(&grpcStoreAdapter{s.store}, s.parsed, s.childExecutor())
 
 		engine := runtime.NewEngine(wfAST, funcs)
-		return engine.Execute(context.Background(), args)
+		return engine.Execute(ctx, args)
 	}
 }
 

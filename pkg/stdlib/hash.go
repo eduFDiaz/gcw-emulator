@@ -1,6 +1,7 @@
 package stdlib
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/md5"
 	"crypto/sha1"
@@ -18,7 +19,7 @@ func (r *Registry) registerHash() {
 	r.Register("hash.compute_hmac", hashComputeHMAC)
 }
 
-func hashComputeChecksum(args []types.Value) (types.Value, error) {
+func hashComputeChecksum(_ context.Context, args []types.Value) (types.Value, error) {
 	if len(args) == 0 {
 		return types.Null, fmt.Errorf("hash.compute_checksum requires arguments")
 	}
@@ -48,7 +49,7 @@ func hashComputeChecksum(args []types.Value) (types.Value, error) {
 	return types.NewBytes(h.Sum(nil)), nil
 }
 
-func hashComputeHMAC(args []types.Value) (types.Value, error) {
+func hashComputeHMAC(_ context.Context, args []types.Value) (types.Value, error) {
 	if len(args) == 0 {
 		return types.Null, fmt.Errorf("hash.compute_hmac requires arguments")
 	}

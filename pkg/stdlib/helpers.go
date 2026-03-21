@@ -1,6 +1,7 @@
 package stdlib
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"strconv"
@@ -21,7 +22,7 @@ func (r *Registry) registerExpressionHelpers() {
 	r.Register("bool", stdBool)
 }
 
-func stdDefault(args []types.Value) (types.Value, error) {
+func stdDefault(_ context.Context, args []types.Value) (types.Value, error) {
 	if err := requireArgs("default", args, 2, 2); err != nil {
 		return types.Null, err
 	}
@@ -31,7 +32,7 @@ func stdDefault(args []types.Value) (types.Value, error) {
 	return args[0], nil
 }
 
-func stdKeys(args []types.Value) (types.Value, error) {
+func stdKeys(_ context.Context, args []types.Value) (types.Value, error) {
 	if err := requireArgs("keys", args, 1, 1); err != nil {
 		return types.Null, err
 	}
@@ -46,7 +47,7 @@ func stdKeys(args []types.Value) (types.Value, error) {
 	return types.NewList(result), nil
 }
 
-func stdLen(args []types.Value) (types.Value, error) {
+func stdLen(_ context.Context, args []types.Value) (types.Value, error) {
 	if err := requireArgs("len", args, 1, 1); err != nil {
 		return types.Null, err
 	}
@@ -65,14 +66,14 @@ func stdLen(args []types.Value) (types.Value, error) {
 	}
 }
 
-func stdType(args []types.Value) (types.Value, error) {
+func stdType(_ context.Context, args []types.Value) (types.Value, error) {
 	if err := requireArgs("type", args, 1, 1); err != nil {
 		return types.Null, err
 	}
 	return types.NewString(args[0].Type().String()), nil
 }
 
-func stdInt(args []types.Value) (types.Value, error) {
+func stdInt(_ context.Context, args []types.Value) (types.Value, error) {
 	if err := requireArgs("int", args, 1, 1); err != nil {
 		return types.Null, err
 	}
@@ -105,7 +106,7 @@ func stdInt(args []types.Value) (types.Value, error) {
 	}
 }
 
-func stdDouble(args []types.Value) (types.Value, error) {
+func stdDouble(_ context.Context, args []types.Value) (types.Value, error) {
 	if err := requireArgs("double", args, 1, 1); err != nil {
 		return types.Null, err
 	}
@@ -133,14 +134,14 @@ func stdDouble(args []types.Value) (types.Value, error) {
 	}
 }
 
-func stdString(args []types.Value) (types.Value, error) {
+func stdString(_ context.Context, args []types.Value) (types.Value, error) {
 	if err := requireArgs("string", args, 1, 1); err != nil {
 		return types.Null, err
 	}
 	return types.NewString(args[0].String()), nil
 }
 
-func stdBool(args []types.Value) (types.Value, error) {
+func stdBool(_ context.Context, args []types.Value) (types.Value, error) {
 	if err := requireArgs("bool", args, 1, 1); err != nil {
 		return types.Null, err
 	}

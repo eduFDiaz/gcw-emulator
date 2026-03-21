@@ -1,6 +1,7 @@
 package stdlib
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -35,8 +36,8 @@ func (s *CallbackStore) Create() string {
 	return id
 }
 
-// Await waits for a callback to be triggered or times out.
-func (s *CallbackStore) Await(id string, timeout time.Duration) (types.Value, error) {
+// Await waits for a callback to be triggered, times out, or is cancelled via context.
+func (s *CallbackStore) Await(ctx context.Context, id string, timeout time.Duration) (types.Value, error) {
 	s.mu.Lock()
 	ch, ok := s.callbacks[id]
 	s.mu.Unlock()
@@ -48,6 +49,11 @@ func (s *CallbackStore) Await(id string, timeout time.Duration) (types.Value, er
 	select {
 	case val := <-ch:
 		return val, nil
+	case <-ctx.Done():
+		s.mu.Lock()
+		delete(s.callbacks, id)
+		s.mu.Unlock()
+		return types.Null, ctx.Err()
 	case <-time.After(timeout):
 		s.mu.Lock()
 		delete(s.callbacks, id)
@@ -87,7 +93,7 @@ func (r *Registry) registerEvents() {
 	r.Register("events.await_callback", eventsAwaitCallback)
 }
 
-func eventsCreateCallback(args []types.Value) (types.Value, error) {
+func eventsCreateCallback(_ context.Context, args []types.Value) (types.Value, error) {
 	id := globalCallbackStore.Create()
 
 	// Return callback info as a map
@@ -96,7 +102,7 @@ func eventsCreateCallback(args []types.Value) (types.Value, error) {
 	return types.NewMap(m), nil
 }
 
-func eventsAwaitCallback(args []types.Value) (types.Value, error) {
+func eventsAwaitCallback(ctx context.Context, args []types.Value) (types.Value, error) {
 	var callbackVal types.Value
 	var timeoutSec float64 = 300 // default 5 minutes
 
@@ -131,5 +137,5 @@ func eventsAwaitCallback(args []types.Value) (types.Value, error) {
 	}
 
 	timeout := time.Duration(timeoutSec * float64(time.Second))
-	return globalCallbackStore.Await(callbackID, timeout)
+	return globalCallbackStore.Await(ctx, callbackID, timeout)
 }

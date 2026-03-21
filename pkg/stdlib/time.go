@@ -1,6 +1,7 @@
 package stdlib
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -13,7 +14,7 @@ func (r *Registry) registerTime() {
 	r.Register("time.parse", timeParse)
 }
 
-func timeFormat(args []types.Value) (types.Value, error) {
+func timeFormat(_ context.Context, args []types.Value) (types.Value, error) {
 	if len(args) == 0 {
 		return types.Null, fmt.Errorf("time.format requires a timestamp argument")
 	}
@@ -57,7 +58,7 @@ func timeFormat(args []types.Value) (types.Value, error) {
 	return types.NewString(t.Format(time.RFC3339Nano)), nil
 }
 
-func timeParse(args []types.Value) (types.Value, error) {
+func timeParse(_ context.Context, args []types.Value) (types.Value, error) {
 	if len(args) == 0 {
 		return types.Null, fmt.Errorf("time.parse requires a value argument")
 	}

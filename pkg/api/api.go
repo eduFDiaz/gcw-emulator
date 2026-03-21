@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -28,7 +29,10 @@ type Server struct {
 	app    *fiber.App
 	store  *store.Store
 	parsed map[string]*ast.Workflow // cached parsed workflows
-	engines map[string]*runtime.Engine // running execution engines (for cancel)
+
+	mu      sync.RWMutex
+	engines map[string]*runtime.Engine      // running execution engines (for cancel)
+	cancels map[string]context.CancelFunc   // cancel functions for running executions
 }
 
 // New creates a new API server.
@@ -37,6 +41,7 @@ func New(s *store.Store) *Server {
 		store:   s,
 		parsed:  make(map[string]*ast.Workflow),
 		engines: make(map[string]*runtime.Engine),
+		cancels: make(map[string]context.CancelFunc),
 	}
 
 	app := fiber.New(fiber.Config{
@@ -352,14 +357,21 @@ func (s *Server) runExecution(execName string, wfAST *ast.Workflow, args types.V
 	funcs.RegisterWorkflowExecution(&storeAdapter{s.store}, s.parsed, s.childExecutor())
 
 	engine := runtime.NewEngine(wfAST, funcs)
+	ctx, cancel := context.WithCancel(context.Background())
 
-	// Store engine reference for cancellation
+	// Store engine and cancel func for cancellation
+	s.mu.Lock()
 	s.engines[execName] = engine
+	s.cancels[execName] = cancel
+	s.mu.Unlock()
 
-	ctx := context.Background()
 	result, err := engine.Execute(ctx, args)
 
+	s.mu.Lock()
 	delete(s.engines, execName)
+	delete(s.cancels, execName)
+	s.mu.Unlock()
+	cancel() // ensure resources are freed
 
 	if err != nil {
 		log.Printf("[ERROR] Execution %s failed: %v", execName, err)
@@ -373,13 +385,13 @@ func (s *Server) runExecution(execName string, wfAST *ast.Workflow, args types.V
 // childExecutor returns a ChildExecutor that creates a fresh engine for each
 // child workflow execution, with all stdlib functions registered.
 func (s *Server) childExecutor() stdlib.ChildExecutor {
-	return func(wfAST *ast.Workflow, args types.Value) (types.Value, error) {
+	return func(ctx context.Context, wfAST *ast.Workflow, args types.Value) (types.Value, error) {
 		funcs := stdlib.NewRegistry()
 		funcs.RegisterHTTP(&http.Client{Timeout: stdlib.DefaultHTTPTimeout})
 		funcs.RegisterWorkflowExecution(&storeAdapter{s.store}, s.parsed, s.childExecutor())
 
 		engine := runtime.NewEngine(wfAST, funcs)
-		return engine.Execute(context.Background(), args)
+		return engine.Execute(ctx, args)
 	}
 }
 
@@ -434,8 +446,15 @@ func (s *Server) cancelExecution(c *fiber.Ctx) error {
 	name := buildExecutionName(c)
 
 	// Cancel the engine if running
-	if engine, ok := s.engines[name]; ok {
+	s.mu.RLock()
+	engine, hasEngine := s.engines[name]
+	cancelFn, hasCancel := s.cancels[name]
+	s.mu.RUnlock()
+	if hasEngine {
 		engine.Cancel()
+	}
+	if hasCancel {
+		cancelFn()
 	}
 
 	err := s.store.CancelExecution(name)

@@ -1,6 +1,7 @@
 package stdlib
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -35,12 +36,13 @@ func TestHTTP_NilClientUsesDefaultTimeout(t *testing.T) {
 	}))
 	defer server.Close()
 
+	ctx := context.Background()
 	args := []types.Value{
 		types.NewMapFromGoMap(map[string]types.Value{
 			"url": types.NewString(server.URL),
 		}),
 	}
-	result, err := r.CallFunction("http.get", args)
+	result, err := r.CallFunction(ctx, "http.get", args)
 	if err != nil {
 		t.Fatalf("http.get failed: %v", err)
 	}
@@ -51,8 +53,6 @@ func TestHTTP_NilClientUsesDefaultTimeout(t *testing.T) {
 
 // TestHTTP_RequestRespectsPerRequestTimeout verifies that a per-request timeout
 // (from the YAML args) is honored, not overridden by the client-level timeout.
-// This is the bug scenario: a slow server should be reachable when the per-request
-// timeout is generous, even if the old hardcoded client timeout was 30s.
 func TestHTTP_RequestRespectsPerRequestTimeout(t *testing.T) {
 	// Server that responds after 100ms delay
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -65,6 +65,7 @@ func TestHTTP_RequestRespectsPerRequestTimeout(t *testing.T) {
 	r := NewRegistry()
 	r.RegisterHTTP(&http.Client{Timeout: DefaultHTTPTimeout})
 
+	ctx := context.Background()
 	// Set per-request timeout to 5s — should succeed since server responds in 100ms
 	args := []types.Value{
 		types.NewMapFromGoMap(map[string]types.Value{
@@ -73,7 +74,7 @@ func TestHTTP_RequestRespectsPerRequestTimeout(t *testing.T) {
 		}),
 	}
 
-	result, err := r.CallFunction("http.get", args)
+	result, err := r.CallFunction(ctx, "http.get", args)
 	if err != nil {
 		t.Fatalf("http.get with 5s timeout failed: %v", err)
 	}
@@ -83,8 +84,7 @@ func TestHTTP_RequestRespectsPerRequestTimeout(t *testing.T) {
 }
 
 // TestHTTP_ShortPerRequestTimeoutCausesTimeout verifies that a very short
-// per-request timeout correctly times out the request (proving the per-request
-// timeout is effective, not just the client-level one).
+// per-request timeout correctly times out the request.
 func TestHTTP_ShortPerRequestTimeoutCausesTimeout(t *testing.T) {
 	// Server that takes 2s to respond
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -97,6 +97,7 @@ func TestHTTP_ShortPerRequestTimeoutCausesTimeout(t *testing.T) {
 	r := NewRegistry()
 	r.RegisterHTTP(&http.Client{Timeout: DefaultHTTPTimeout})
 
+	ctx := context.Background()
 	// Set per-request timeout to 0.1s — should timeout since server takes 2s
 	args := []types.Value{
 		types.NewMapFromGoMap(map[string]types.Value{
@@ -105,8 +106,50 @@ func TestHTTP_ShortPerRequestTimeoutCausesTimeout(t *testing.T) {
 		}),
 	}
 
-	_, err := r.CallFunction("http.get", args)
+	_, err := r.CallFunction(ctx, "http.get", args)
 	if err == nil {
 		t.Fatal("expected timeout error, got nil")
+	}
+}
+
+// TestHTTP_ParentContextCancellationStopsRequest verifies that cancelling the
+// parent context propagates to in-flight HTTP requests.
+func TestHTTP_ParentContextCancellationStopsRequest(t *testing.T) {
+	requestReceived := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(requestReceived)
+		// Block until request context is cancelled
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	r := NewRegistry()
+	r.RegisterHTTP(&http.Client{Timeout: DefaultHTTPTimeout})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	args := []types.Value{
+		types.NewMapFromGoMap(map[string]types.Value{
+			"url":     types.NewString(server.URL),
+			"timeout": types.NewDouble(30),
+		}),
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := r.CallFunction(ctx, "http.get", args)
+		done <- err
+	}()
+
+	// Wait for server to receive the request, then cancel
+	<-requestReceived
+	cancel()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected error from cancelled context, got nil")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("HTTP request was not cancelled within 5s — context cancellation not propagated")
 	}
 }

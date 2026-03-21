@@ -1,6 +1,7 @@
 package stdlib
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -18,7 +19,7 @@ func (r *Registry) registerSys() {
 	r.Register("sys.sleep_until", sysSleepUntil)
 }
 
-func sysGetEnv(args []types.Value) (types.Value, error) {
+func sysGetEnv(_ context.Context, args []types.Value) (types.Value, error) {
 	if len(args) == 0 {
 		return types.Null, fmt.Errorf("sys.get_env requires a name argument")
 	}
@@ -70,7 +71,7 @@ func envOrDefault(key, defaultVal string) string {
 	return defaultVal
 }
 
-func sysLog(args []types.Value) (types.Value, error) {
+func sysLog(_ context.Context, args []types.Value) (types.Value, error) {
 	if len(args) == 0 {
 		return types.Null, nil
 	}
@@ -102,11 +103,11 @@ func sysLog(args []types.Value) (types.Value, error) {
 	return types.Null, nil
 }
 
-func sysNow(args []types.Value) (types.Value, error) {
+func sysNow(_ context.Context, args []types.Value) (types.Value, error) {
 	return types.NewDouble(float64(time.Now().Unix())), nil
 }
 
-func sysSleep(args []types.Value) (types.Value, error) {
+func sysSleep(ctx context.Context, args []types.Value) (types.Value, error) {
 	if len(args) == 0 {
 		return types.Null, nil
 	}
@@ -134,12 +135,15 @@ func sysSleep(args []types.Value) (types.Value, error) {
 	if duration > time.Second {
 		duration = time.Second // cap at 1s in emulator
 	}
-	time.Sleep(duration)
-
-	return types.Null, nil
+	select {
+	case <-ctx.Done():
+		return types.Null, ctx.Err()
+	case <-time.After(duration):
+		return types.Null, nil
+	}
 }
 
-func sysSleepUntil(args []types.Value) (types.Value, error) {
+func sysSleepUntil(_ context.Context, args []types.Value) (types.Value, error) {
 	// In emulator mode, this is effectively a no-op or very short sleep
 	return types.Null, nil
 }

@@ -44,6 +44,7 @@ type Engine struct {
 	stepCount int
 	callDepth int
 	cancelled bool
+	cancelCtx context.CancelFunc // set during Execute to allow external cancellation
 }
 
 // contextKey is an unexported type for context keys defined in this package.
@@ -74,6 +75,13 @@ func NewEngine(workflow *ast.Workflow, funcs FunctionRegistry) *Engine {
 
 // Execute runs the main workflow with the given arguments and returns the result.
 func (e *Engine) Execute(ctx context.Context, args types.Value) (types.Value, error) {
+	// Wrap context so Cancel() can trigger cancellation of in-flight operations
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	e.mu.Lock()
+	e.cancelCtx = cancel
+	e.mu.Unlock()
+
 	scope := NewScope()
 
 	// Set up main workflow parameters
@@ -113,6 +121,7 @@ func (e *Engine) executeSubworkflow(ctx context.Context, sub *ast.Subworkflow, s
 	e.callDepth++
 	depth := e.callDepth
 	e.mu.Unlock()
+	log.Printf("[DEBUG] Entering subworkflow: %s (depth=%d)", sub.Name, depth)
 
 	defer func() {
 		e.mu.Lock()
@@ -222,7 +231,7 @@ func (e *Engine) executeStep(ctx context.Context, step *ast.Step, scope *Variabl
 
 	// Handle assign step
 	if step.Assign != nil {
-		err = e.executeAssign(step.Assign, scope)
+		err = e.executeAssign(ctx, step.Assign, scope)
 		if err != nil {
 			return StepResult{}, err
 		}
@@ -279,12 +288,12 @@ func (e *Engine) executeStep(ctx context.Context, step *ast.Step, scope *Variabl
 
 	// Handle raise
 	if step.Raise != nil {
-		return StepResult{}, e.executeRaise(step.Raise, scope)
+		return StepResult{}, e.executeRaise(ctx, step.Raise, scope)
 	}
 
 	// Handle return
 	if step.HasReturn {
-		val, err := EvalValue(step.Return, scope, e.funcs)
+		val, err := EvalValue(ctx, step.Return, scope, e.funcs)
 		if err != nil {
 			return StepResult{}, err
 		}
@@ -303,7 +312,7 @@ func (e *Engine) executeStep(ctx context.Context, step *ast.Step, scope *Variabl
 const MaxAssignments = 50
 
 // executeAssign executes an assign step.
-func (e *Engine) executeAssign(assignments []ast.Assignment, scope *VariableScope) error {
+func (e *Engine) executeAssign(ctx context.Context, assignments []ast.Assignment, scope *VariableScope) error {
 	if len(assignments) > MaxAssignments {
 		return types.NewResourceLimitError(
 			fmt.Sprintf("assign step exceeds maximum of %d assignments", MaxAssignments))
@@ -313,7 +322,7 @@ func (e *Engine) executeAssign(assignments []ast.Assignment, scope *VariableScop
 	defer scope.UnlockShared()
 
 	for _, a := range assignments {
-		val, err := EvalValue(a.Value, scope, e.funcs)
+		val, err := EvalValue(ctx, a.Value, scope, e.funcs)
 		if err != nil {
 			return err
 		}
@@ -333,13 +342,14 @@ func (e *Engine) executeCall(ctx context.Context, call *ast.CallExpr, scope *Var
 	}
 
 	// It's a stdlib/HTTP call — evaluate args and call through the function registry
+	log.Printf("[DEBUG] Calling function: %s", call.Function)
 	args := make([]types.Value, 0)
 
 	if call.Args != nil {
 		// Build a single map argument for function calls
 		argMap := types.NewOrderedMap()
 		for k, v := range call.Args {
-			val, err := EvalValue(v, scope, e.funcs)
+			val, err := EvalValue(ctx, v, scope, e.funcs)
 			if err != nil {
 				return err
 			}
@@ -348,7 +358,7 @@ func (e *Engine) executeCall(ctx context.Context, call *ast.CallExpr, scope *Var
 		args = append(args, types.NewMap(argMap))
 	}
 
-	result, err := e.funcs.CallFunction(call.Function, args)
+	result, err := e.funcs.CallFunction(ctx, call.Function, args)
 	if err != nil {
 		return err
 	}
@@ -368,7 +378,7 @@ func (e *Engine) executeSubworkflowCall(ctx context.Context, sub *ast.Subworkflo
 	for _, param := range sub.Params {
 		if call.Args != nil {
 			if argExpr, ok := call.Args[param.Name]; ok {
-				val, err := EvalValue(argExpr, parentScope, e.funcs)
+				val, err := EvalValue(ctx, argExpr, parentScope, e.funcs)
 				if err != nil {
 					return err
 				}
@@ -378,7 +388,7 @@ func (e *Engine) executeSubworkflowCall(ctx context.Context, sub *ast.Subworkflo
 		}
 		// Use default value
 		if param.HasDefault {
-			val, err := EvalValue(param.Default, parentScope, e.funcs)
+			val, err := EvalValue(ctx, param.Default, parentScope, e.funcs)
 			if err != nil {
 				return err
 			}
@@ -411,7 +421,7 @@ func (e *Engine) executeSwitch(ctx context.Context, conditions []ast.SwitchCondi
 	}
 	for _, cond := range conditions {
 		if cond.Condition != nil {
-			val, err := EvalValue(cond.Condition, scope, e.funcs)
+			val, err := EvalValue(ctx, cond.Condition, scope, e.funcs)
 			if err != nil {
 				return StepResult{}, err
 			}
@@ -422,7 +432,7 @@ func (e *Engine) executeSwitch(ctx context.Context, conditions []ast.SwitchCondi
 
 		// Condition matched - execute any inline actions
 		if cond.Assign != nil {
-			err := e.executeAssign(cond.Assign, scope)
+			err := e.executeAssign(ctx, cond.Assign, scope)
 			if err != nil {
 				return StepResult{}, err
 			}
@@ -439,7 +449,7 @@ func (e *Engine) executeSwitch(ctx context.Context, conditions []ast.SwitchCondi
 		}
 
 		if cond.HasReturn {
-			val, err := EvalValue(cond.Return, scope, e.funcs)
+			val, err := EvalValue(ctx, cond.Return, scope, e.funcs)
 			if err != nil {
 				return StepResult{}, err
 			}
@@ -447,7 +457,7 @@ func (e *Engine) executeSwitch(ctx context.Context, conditions []ast.SwitchCondi
 		}
 
 		if cond.Raise != nil {
-			return StepResult{}, e.executeRaise(cond.Raise, scope)
+			return StepResult{}, e.executeRaise(ctx, cond.Raise, scope)
 		}
 
 		if cond.Next != "" {
@@ -469,11 +479,11 @@ func (e *Engine) executeFor(ctx context.Context, forExpr *ast.ForExpr, parentSco
 
 	if forExpr.HasRange {
 		// Evaluate range bounds
-		startVal, err := EvalValue(forExpr.Range[0], parentScope, e.funcs)
+		startVal, err := EvalValue(ctx, forExpr.Range[0], parentScope, e.funcs)
 		if err != nil {
 			return StepResult{}, err
 		}
-		endVal, err := EvalValue(forExpr.Range[1], parentScope, e.funcs)
+		endVal, err := EvalValue(ctx, forExpr.Range[1], parentScope, e.funcs)
 		if err != nil {
 			return StepResult{}, err
 		}
@@ -484,7 +494,7 @@ func (e *Engine) executeFor(ctx context.Context, forExpr *ast.ForExpr, parentSco
 		}
 	} else {
 		// Evaluate the iterable
-		iterVal, err := EvalValue(forExpr.In, parentScope, e.funcs)
+		iterVal, err := EvalValue(ctx, forExpr.In, parentScope, e.funcs)
 		if err != nil {
 			return StepResult{}, err
 		}
@@ -556,6 +566,7 @@ func (e *Engine) executeTry(ctx context.Context, tryExpr *ast.TryExpr, scope *Va
 		// Check if we should retry
 		if tryExpr.Retry != nil && attempt < maxAttempts-1 {
 			if e.shouldRetry(tryExpr.Retry, err, scope) {
+				log.Printf("[DEBUG] Retry attempt %d/%d (error: %v)", attempt+1, maxAttempts-1, err)
 				// Apply backoff delay if configured
 				if tryExpr.Retry.Backoff != nil {
 					delay := e.calculateBackoff(tryExpr.Retry.Backoff, attempt)
@@ -662,8 +673,8 @@ func (e *Engine) executeExcept(ctx context.Context, except *ast.ExceptExpr, err 
 }
 
 // executeRaise raises an error from a raise step.
-func (e *Engine) executeRaise(raiseExpr interface{}, scope *VariableScope) error {
-	val, err := EvalValue(raiseExpr, scope, e.funcs)
+func (e *Engine) executeRaise(ctx context.Context, raiseExpr interface{}, scope *VariableScope) error {
+	val, err := EvalValue(ctx, raiseExpr, scope, e.funcs)
 	if err != nil {
 		return err
 	}
@@ -697,9 +708,11 @@ func (e *Engine) executeParallel(ctx context.Context, p *ast.ParallelExpr, scope
 	ctx = context.WithValue(ctx, parallelDepthKey, depth)
 
 	if p.Branches != nil {
+		log.Printf("[DEBUG] Parallel branches: %d (depth=%d)", len(p.Branches), depth)
 		return e.executeParallelBranches(ctx, p, scope)
 	}
 	if p.For != nil {
+		log.Printf("[DEBUG] Parallel for (depth=%d)", depth)
 		return e.executeParallelFor(ctx, p, scope)
 	}
 	return nil
@@ -791,7 +804,7 @@ func (e *Engine) executeParallelBranches(ctx context.Context, p *ast.ParallelExp
 // executeParallelFor runs a parallel for loop.
 func (e *Engine) executeParallelFor(ctx context.Context, p *ast.ParallelExpr, scope *VariableScope) error {
 	// Evaluate the iterable
-	iterVal, err := EvalValue(p.For.In, scope, e.funcs)
+	iterVal, err := EvalValue(ctx, p.For.In, scope, e.funcs)
 	if err != nil {
 		return err
 	}
@@ -854,10 +867,13 @@ func (e *Engine) executeParallelFor(ctx context.Context, p *ast.ParallelExpr, sc
 	return firstErr
 }
 
-// Cancel cancels the current execution.
+// Cancel cancels the current execution, including any in-flight operations.
 func (e *Engine) Cancel() {
 	e.mu.Lock()
 	e.cancelled = true
+	if e.cancelCtx != nil {
+		e.cancelCtx()
+	}
 	e.mu.Unlock()
 }
 

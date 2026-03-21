@@ -1,6 +1,7 @@
 package stdlib
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/lemonberrylabs/gcw-emulator/pkg/types"
@@ -12,7 +13,7 @@ func (r *Registry) registerList() {
 	r.Register("list.prepend", listPrepend)
 }
 
-func listConcat(args []types.Value) (types.Value, error) {
+func listConcat(_ context.Context, args []types.Value) (types.Value, error) {
 	// list.concat(list1, list2) - concatenates two lists
 	if len(args) == 0 {
 		return types.NewList(nil), nil
@@ -57,7 +58,7 @@ func listConcat(args []types.Value) (types.Value, error) {
 	return types.NewList(result), nil
 }
 
-func listPrepend(args []types.Value) (types.Value, error) {
+func listPrepend(_ context.Context, args []types.Value) (types.Value, error) {
 	if len(args) == 0 {
 		return types.Null, fmt.Errorf("list.prepend requires arguments")
 	}

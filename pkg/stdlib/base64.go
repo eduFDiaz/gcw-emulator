@@ -1,6 +1,7 @@
 package stdlib
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 
@@ -13,7 +14,7 @@ func (r *Registry) registerBase64() {
 	r.Register("base64.encode", base64Encode)
 }
 
-func base64Decode(args []types.Value) (types.Value, error) {
+func base64Decode(_ context.Context, args []types.Value) (types.Value, error) {
 	if len(args) == 0 {
 		return types.Null, fmt.Errorf("base64.decode requires an argument")
 	}
@@ -45,7 +46,7 @@ func base64Decode(args []types.Value) (types.Value, error) {
 	return types.NewBytes(decoded), nil
 }
 
-func base64Encode(args []types.Value) (types.Value, error) {
+func base64Encode(_ context.Context, args []types.Value) (types.Value, error) {
 	if len(args) == 0 {
 		return types.Null, fmt.Errorf("base64.encode requires an argument")
 	}

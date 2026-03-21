@@ -1,6 +1,7 @@
 package stdlib
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/lemonberrylabs/gcw-emulator/pkg/types"
@@ -14,7 +15,7 @@ func (r *Registry) registerMapFuncs() {
 	r.Register("map.merge_nested", mapMergeNested)
 }
 
-func mapGet(args []types.Value) (types.Value, error) {
+func mapGet(_ context.Context, args []types.Value) (types.Value, error) {
 	// map.get(map, key) or map.get(map, key, default)
 	// Can be called positionally from expressions or via map-style args from call steps
 
@@ -70,7 +71,7 @@ func mapGet(args []types.Value) (types.Value, error) {
 	return val, nil
 }
 
-func mapDelete(args []types.Value) (types.Value, error) {
+func mapDelete(_ context.Context, args []types.Value) (types.Value, error) {
 	if len(args) == 0 {
 		return types.Null, fmt.Errorf("map.delete requires arguments")
 	}
@@ -108,7 +109,7 @@ func mapDelete(args []types.Value) (types.Value, error) {
 	return types.NewMap(result), nil
 }
 
-func mapMerge(args []types.Value) (types.Value, error) {
+func mapMerge(_ context.Context, args []types.Value) (types.Value, error) {
 	if len(args) == 0 {
 		return types.Null, fmt.Errorf("map.merge requires arguments")
 	}
@@ -140,7 +141,7 @@ func mapMerge(args []types.Value) (types.Value, error) {
 	return types.NewMap(result), nil
 }
 
-func mapMergeNested(args []types.Value) (types.Value, error) {
+func mapMergeNested(_ context.Context, args []types.Value) (types.Value, error) {
 	if len(args) == 0 {
 		return types.Null, fmt.Errorf("map.merge_nested requires arguments")
 	}

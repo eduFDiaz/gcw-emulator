@@ -2,13 +2,14 @@
 package stdlib
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/lemonberrylabs/gcw-emulator/pkg/types"
 )
 
 // StdlibFunc is a standard library function signature.
-type StdlibFunc func(args []types.Value) (types.Value, error)
+type StdlibFunc func(ctx context.Context, args []types.Value) (types.Value, error)
 
 // Registry holds all standard library functions and serves as a FunctionRegistry.
 type Registry struct {
@@ -36,12 +37,12 @@ func NewRegistry() *Registry {
 }
 
 // CallFunction implements FunctionRegistry.
-func (r *Registry) CallFunction(name string, args []types.Value) (types.Value, error) {
+func (r *Registry) CallFunction(ctx context.Context, name string, args []types.Value) (types.Value, error) {
 	fn, ok := r.funcs[name]
 	if !ok {
 		return types.Null, fmt.Errorf("unknown function '%s'", name)
 	}
-	return fn(args)
+	return fn(ctx, args)
 }
 
 // Register adds a function to the registry.

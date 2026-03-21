@@ -1,6 +1,7 @@
 package stdlib
 
 import (
+	"context"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -27,7 +28,7 @@ func (r *Registry) registerText() {
 	r.Register("text.url_encode_plus", textURLEncodePlus)
 }
 
-func textDecode(args []types.Value) (types.Value, error) {
+func textDecode(_ context.Context, args []types.Value) (types.Value, error) {
 	if len(args) == 0 {
 		return types.Null, fmt.Errorf("text.decode requires an argument")
 	}
@@ -46,7 +47,7 @@ func textDecode(args []types.Value) (types.Value, error) {
 	return types.NewString(string(data)), nil
 }
 
-func textEncode(args []types.Value) (types.Value, error) {
+func textEncode(_ context.Context, args []types.Value) (types.Value, error) {
 	if len(args) == 0 {
 		return types.Null, fmt.Errorf("text.encode requires an argument")
 	}
@@ -65,7 +66,7 @@ func textEncode(args []types.Value) (types.Value, error) {
 	return types.NewBytes([]byte(s)), nil
 }
 
-func textFindAll(args []types.Value) (types.Value, error) {
+func textFindAll(_ context.Context, args []types.Value) (types.Value, error) {
 	if len(args) == 0 {
 		return types.Null, fmt.Errorf("text.find_all requires source and substr arguments")
 	}
@@ -101,7 +102,7 @@ func textFindAll(args []types.Value) (types.Value, error) {
 	return types.NewList(results), nil
 }
 
-func textFindAllRegex(args []types.Value) (types.Value, error) {
+func textFindAllRegex(_ context.Context, args []types.Value) (types.Value, error) {
 	var source, pattern string
 	if len(args) > 0 && args[0].Type() == types.TypeMap {
 		m := args[0].AsMap()
@@ -133,7 +134,7 @@ func textFindAllRegex(args []types.Value) (types.Value, error) {
 	return types.NewList(result), nil
 }
 
-func textMatchRegex(args []types.Value) (types.Value, error) {
+func textMatchRegex(_ context.Context, args []types.Value) (types.Value, error) {
 	var source, pattern string
 	if len(args) > 0 && args[0].Type() == types.TypeMap {
 		m := args[0].AsMap()
@@ -160,7 +161,7 @@ func textMatchRegex(args []types.Value) (types.Value, error) {
 	return types.NewBool(re.MatchString(source)), nil
 }
 
-func textReplaceAll(args []types.Value) (types.Value, error) {
+func textReplaceAll(_ context.Context, args []types.Value) (types.Value, error) {
 	var source, substr, replacement string
 	if len(args) > 0 && args[0].Type() == types.TypeMap {
 		m := args[0].AsMap()
@@ -182,7 +183,7 @@ func textReplaceAll(args []types.Value) (types.Value, error) {
 	return types.NewString(strings.ReplaceAll(source, substr, replacement)), nil
 }
 
-func textReplaceAllRegex(args []types.Value) (types.Value, error) {
+func textReplaceAllRegex(_ context.Context, args []types.Value) (types.Value, error) {
 	var source, pattern, replacement string
 	if len(args) > 0 && args[0].Type() == types.TypeMap {
 		m := args[0].AsMap()
@@ -209,7 +210,7 @@ func textReplaceAllRegex(args []types.Value) (types.Value, error) {
 	return types.NewString(re.ReplaceAllString(source, replacement)), nil
 }
 
-func textSplit(args []types.Value) (types.Value, error) {
+func textSplit(_ context.Context, args []types.Value) (types.Value, error) {
 	var source, separator string
 	if len(args) > 0 && args[0].Type() == types.TypeMap {
 		m := args[0].AsMap()
@@ -232,7 +233,7 @@ func textSplit(args []types.Value) (types.Value, error) {
 	return types.NewList(result), nil
 }
 
-func textSubstring(args []types.Value) (types.Value, error) {
+func textSubstring(_ context.Context, args []types.Value) (types.Value, error) {
 	var source string
 	var start, end int64
 
@@ -272,7 +273,7 @@ func textSubstring(args []types.Value) (types.Value, error) {
 	return types.NewString(source[start:end]), nil
 }
 
-func textToLower(args []types.Value) (types.Value, error) {
+func textToLower(_ context.Context, args []types.Value) (types.Value, error) {
 	if len(args) == 0 {
 		return types.Null, fmt.Errorf("text.to_lower requires an argument")
 	}
@@ -287,7 +288,7 @@ func textToLower(args []types.Value) (types.Value, error) {
 	return types.NewString(strings.ToLower(s)), nil
 }
 
-func textToUpper(args []types.Value) (types.Value, error) {
+func textToUpper(_ context.Context, args []types.Value) (types.Value, error) {
 	if len(args) == 0 {
 		return types.Null, fmt.Errorf("text.to_upper requires an argument")
 	}
@@ -302,7 +303,7 @@ func textToUpper(args []types.Value) (types.Value, error) {
 	return types.NewString(strings.ToUpper(s)), nil
 }
 
-func textURLDecode(args []types.Value) (types.Value, error) {
+func textURLDecode(_ context.Context, args []types.Value) (types.Value, error) {
 	if len(args) == 0 {
 		return types.Null, fmt.Errorf("text.url_decode requires an argument")
 	}
@@ -321,7 +322,7 @@ func textURLDecode(args []types.Value) (types.Value, error) {
 	return types.NewString(decoded), nil
 }
 
-func textURLEncode(args []types.Value) (types.Value, error) {
+func textURLEncode(_ context.Context, args []types.Value) (types.Value, error) {
 	if len(args) == 0 {
 		return types.Null, fmt.Errorf("text.url_encode requires an argument")
 	}
@@ -336,7 +337,7 @@ func textURLEncode(args []types.Value) (types.Value, error) {
 	return types.NewString(url.PathEscape(s)), nil
 }
 
-func textURLEncodePlus(args []types.Value) (types.Value, error) {
+func textURLEncodePlus(_ context.Context, args []types.Value) (types.Value, error) {
 	if len(args) == 0 {
 		return types.Null, fmt.Errorf("text.url_encode_plus requires an argument")
 	}

@@ -1,6 +1,7 @@
 package stdlib
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
@@ -14,7 +15,7 @@ func (r *Registry) registerJSON() {
 	r.Register("json.encode_to_string", jsonEncodeToString)
 }
 
-func jsonDecode(args []types.Value) (types.Value, error) {
+func jsonDecode(_ context.Context, args []types.Value) (types.Value, error) {
 	if len(args) == 0 {
 		return types.Null, fmt.Errorf("json.decode requires an argument")
 	}
@@ -40,7 +41,7 @@ func jsonDecode(args []types.Value) (types.Value, error) {
 	return types.ValueFromJSON(raw), nil
 }
 
-func jsonEncode(args []types.Value) (types.Value, error) {
+func jsonEncode(_ context.Context, args []types.Value) (types.Value, error) {
 	if len(args) == 0 {
 		return types.Null, fmt.Errorf("json.encode requires an argument")
 	}
@@ -63,7 +64,7 @@ func jsonEncode(args []types.Value) (types.Value, error) {
 	return types.NewBytes(b), nil
 }
 
-func jsonEncodeToString(args []types.Value) (types.Value, error) {
+func jsonEncodeToString(_ context.Context, args []types.Value) (types.Value, error) {
 	if len(args) == 0 {
 		return types.Null, fmt.Errorf("json.encode_to_string requires an argument")
 	}

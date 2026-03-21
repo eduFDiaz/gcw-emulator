@@ -1,6 +1,7 @@
 package stdlib
 
 import (
+	"context"
 	"math"
 
 	"github.com/lemonberrylabs/gcw-emulator/pkg/types"
@@ -14,7 +15,7 @@ func (r *Registry) registerMath() {
 	r.Register("math.min", mathMin)
 }
 
-func mathAbs(args []types.Value) (types.Value, error) {
+func mathAbs(_ context.Context, args []types.Value) (types.Value, error) {
 	if err := requireArgs("math.abs", args, 1, 1); err != nil {
 		return types.Null, err
 	}
@@ -33,7 +34,7 @@ func mathAbs(args []types.Value) (types.Value, error) {
 	}
 }
 
-func mathFloor(args []types.Value) (types.Value, error) {
+func mathFloor(_ context.Context, args []types.Value) (types.Value, error) {
 	if err := requireArgs("math.floor", args, 1, 1); err != nil {
 		return types.Null, err
 	}
@@ -48,7 +49,7 @@ func mathFloor(args []types.Value) (types.Value, error) {
 	}
 }
 
-func mathMax(args []types.Value) (types.Value, error) {
+func mathMax(_ context.Context, args []types.Value) (types.Value, error) {
 	if err := requireArgs("math.max", args, 2, 2); err != nil {
 		return types.Null, err
 	}
@@ -63,7 +64,7 @@ func mathMax(args []types.Value) (types.Value, error) {
 	return args[1], nil
 }
 
-func mathMin(args []types.Value) (types.Value, error) {
+func mathMin(_ context.Context, args []types.Value) (types.Value, error) {
 	if err := requireArgs("math.min", args, 2, 2); err != nil {
 		return types.Null, err
 	}

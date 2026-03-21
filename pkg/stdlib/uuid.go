@@ -1,6 +1,7 @@
 package stdlib
 
 import (
+	"context"
 	"crypto/rand"
 	"fmt"
 
@@ -12,7 +13,7 @@ func (r *Registry) registerUUID() {
 	r.Register("uuid.generate", uuidGenerate)
 }
 
-func uuidGenerate(args []types.Value) (types.Value, error) {
+func uuidGenerate(_ context.Context, args []types.Value) (types.Value, error) {
 	uuid, err := generateUUIDv4()
 	if err != nil {
 		return types.Null, fmt.Errorf("uuid.generate: %v", err)
