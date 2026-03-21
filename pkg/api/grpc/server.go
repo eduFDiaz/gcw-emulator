@@ -284,6 +284,7 @@ func (s *Server) runExecution(execName string, wfAST *ast.Workflow, args types.V
 	s.mu.Unlock()
 
 	result, err := engine.Execute(ctx, args)
+	wasCancelled := engine.WasCancelled()
 
 	s.mu.Lock()
 	delete(s.engines, execName)
@@ -292,8 +293,13 @@ func (s *Server) runExecution(execName string, wfAST *ast.Workflow, args types.V
 	cancel()
 
 	if err != nil {
-		log.Printf("[ERROR] Execution %s failed: %v", execName, err)
-		_ = s.store.FailExecution(execName, err)
+		if wasCancelled {
+			log.Printf("[DEBUG] Execution %s cancelled", execName)
+			_ = s.store.CancelExecution(execName)
+		} else {
+			log.Printf("[ERROR] Execution %s failed: %v", execName, err)
+			_ = s.store.FailExecution(execName, err)
+		}
 	} else {
 		log.Printf("[DEBUG] Execution %s completed successfully", execName)
 		_ = s.store.CompleteExecution(execName, result)

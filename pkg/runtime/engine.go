@@ -877,6 +877,13 @@ func (e *Engine) Cancel() {
 	e.mu.Unlock()
 }
 
+// WasCancelled returns whether Cancel was called on this engine.
+func (e *Engine) WasCancelled() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.cancelled
+}
+
 // StepCount returns the current step count.
 func (e *Engine) StepCount() int {
 	e.mu.Lock()
