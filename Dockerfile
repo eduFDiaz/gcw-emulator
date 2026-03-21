@@ -1,6 +1,10 @@
 # Stage 1: Build the emulator binary
 FROM golang:1.25-alpine AS builder
 
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG DATE=unknown
+
 WORKDIR /build
 
 # Cache dependencies
@@ -9,7 +13,9 @@ RUN go mod download
 
 # Copy source and build
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /gcw-emulator ./cmd/gcw-emulator
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath \
+    -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" \
+    -o /gcw-emulator ./cmd/gcw-emulator
 
 # Stage 2: Minimal runtime image
 FROM alpine:3.19

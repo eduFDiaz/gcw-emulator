@@ -123,7 +123,8 @@ func run(cmd *cobra.Command, args []string) error {
 		}
 	}()
 
-	log.Printf("GCW Emulator listening on %s (project=%s, location=%s)", addr, project, location)
+	log.Printf("GCW Emulator %s (commit=%s, built=%s)", version, commit, date)
+	log.Printf("Listening on %s (project=%s, location=%s)", addr, project, location)
 	if workflowsDir != "" {
 		log.Printf("Workflows directory: %s", workflowsDir)
 	} else {

@@ -21,7 +21,11 @@ test:
 	go test ./...
 
 docker-build:
-	docker build -t $(IMAGE_NAME):$(IMAGE_TAG) .
+	docker build \
+	  --build-arg VERSION=$(VERSION) \
+	  --build-arg COMMIT=$(COMMIT) \
+	  --build-arg DATE=$(DATE) \
+	  -t $(IMAGE_NAME):$(IMAGE_TAG) .
 
 docker-run: docker-build
 	docker run --rm -p 8787:8787 -p 8788:8788 $(IMAGE_NAME):$(IMAGE_TAG)
