@@ -25,80 +25,274 @@
     </div>
 </div>
 
-<div class="section">
-    <div class="card">
-        <div class="card-header">
-            <h2>Details</h2>
-        </div>
-        <div class="card-body">
-            <div class="detail-grid">
-                <div class="detail-label">Name</div>
-                <div class="detail-value mono">{{.Data.Execution.Name}}</div>
-                <div class="detail-label">State</div>
-                <div class="detail-value"><span class="state {{stateClass (printf "%s" .Data.Execution.State)}}"><span class="state-icon">{{stateIcon (printf "%s" .Data.Execution.State)}}</span> {{.Data.Execution.State}}</span></div>
-                <div class="detail-label">Workflow</div>
-                <div class="detail-value"><a href="/ui/workflows/{{.Data.WorkflowID}}" class="wf-link">{{.Data.WorkflowID}}</a></div>
-                <div class="detail-label">Revision</div>
-                <div class="detail-value mono">{{.Data.Execution.WorkflowRevisionID}}</div>
-                <div class="detail-label">Started</div>
-                <div class="detail-value">{{formatTime .Data.Execution.StartTime}}</div>
-                {{if not .Data.Execution.EndTime.IsZero}}
-                <div class="detail-label">Ended</div>
-                <div class="detail-value">{{formatTime .Data.Execution.EndTime}}</div>
+<style>
+    .exec-layout {
+        display: grid;
+        grid-template-columns: 320px 1fr;
+        gap: 20px;
+        align-items: start;
+    }
+    @media (max-width: 900px) {
+        .exec-layout { grid-template-columns: 1fr; }
+    }
+
+    /* Workflow Diagram Styles */
+    .wf-diagram {
+        padding: 20px 16px;
+    }
+    .wf-node {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 14px;
+        border-radius: 6px;
+        background: var(--bg-input);
+        border: 1px solid var(--border);
+        margin-bottom: 0;
+        position: relative;
+        transition: border-color 0.2s, background 0.2s;
+        cursor: default;
+    }
+    .wf-node:hover {
+        border-color: var(--border-light);
+        background: var(--bg-card-hover);
+    }
+    .wf-node-icon {
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 13px;
+        flex-shrink: 0;
+        font-weight: 700;
+    }
+    .wf-node-body {
+        flex: 1;
+        min-width: 0;
+    }
+    .wf-node-name {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .wf-node-type {
+        font-size: 11px;
+        color: var(--text-dim);
+        font-family: var(--font-mono);
+    }
+    .wf-node-status {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        flex-shrink: 0;
+    }
+
+    /* Status colors */
+    .wf-node.succeeded { border-color: rgba(52, 211, 153, 0.4); }
+    .wf-node.succeeded .wf-node-icon { background: rgba(52, 211, 153, 0.15); color: var(--green); }
+    .wf-node.succeeded .wf-node-status { background: var(--green); }
+
+    .wf-node.failed { border-color: rgba(248, 113, 113, 0.4); }
+    .wf-node.failed .wf-node-icon { background: rgba(248, 113, 113, 0.15); color: var(--red); }
+    .wf-node.failed .wf-node-status { background: var(--red); }
+
+    .wf-node.running { border-color: rgba(79, 143, 247, 0.4); }
+    .wf-node.running .wf-node-icon { background: rgba(79, 143, 247, 0.15); color: var(--accent); }
+    .wf-node.running .wf-node-status { background: var(--accent); animation: pulse 1.5s infinite; }
+
+    .wf-node.pending .wf-node-icon { background: rgba(107, 114, 128, 0.15); color: var(--text-muted); }
+    .wf-node.pending .wf-node-status { background: var(--text-muted); }
+    .wf-node.pending { opacity: 0.6; }
+
+    /* Connector line */
+    .wf-connector {
+        display: flex;
+        justify-content: center;
+        height: 20px;
+    }
+    .wf-connector-line {
+        width: 2px;
+        height: 100%;
+        background: var(--border-light);
+    }
+    .wf-connector.succeeded .wf-connector-line { background: var(--green); }
+    .wf-connector.failed .wf-connector-line { background: var(--red); }
+    .wf-connector.running .wf-connector-line {
+        background: var(--accent);
+        animation: pulse 1.5s infinite;
+    }
+
+    /* Start/End markers */
+    .wf-marker {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin-bottom: 0;
+    }
+    .wf-marker-dot {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        border: 2px solid var(--border-light);
+        background: var(--bg-card);
+    }
+    .wf-marker-dot.start { border-color: var(--green); background: rgba(52, 211, 153, 0.2); }
+    .wf-marker-dot.end-success { border-color: var(--green); background: var(--green); }
+    .wf-marker-dot.end-fail { border-color: var(--red); background: var(--red); }
+    .wf-marker-dot.end-cancelled { border-color: var(--gray); background: var(--gray); }
+    .wf-marker-dot.end-running { border-color: var(--accent); background: rgba(79, 143, 247, 0.3); animation: pulse 1.5s infinite; }
+
+    /* Step type icons */
+    .step-icon-call::before { content: "→"; }
+    .step-icon-assign::before { content: "="; }
+    .step-icon-switch::before { content: "⋔"; }
+    .step-icon-for::before { content: "↻"; }
+    .step-icon-parallel::before { content: "∥"; }
+    .step-icon-try::before { content: "⟳"; }
+    .step-icon-raise::before { content: "!"; }
+    .step-icon-return::before { content: "↩"; }
+    .step-icon-steps::before { content: "⊞"; }
+    .step-icon-next::before { content: "→"; }
+    .step-icon-unknown::before { content: "•"; }
+</style>
+
+<div class="exec-layout">
+    <!-- Left: Workflow Diagram -->
+    <div class="section">
+        <div class="card">
+            <div class="card-header">
+                <h2>Execution Flow</h2>
+                <span class="badge">{{len .Data.Steps}} steps</span>
+            </div>
+            <div class="wf-diagram" id="workflow-diagram">
+                <!-- Start marker -->
+                <div class="wf-marker"><div class="wf-marker-dot start"></div></div>
+                <div class="wf-connector succeeded"><div class="wf-connector-line"></div></div>
+
+                {{if .Data.Steps}}
+                {{range $i, $step := .Data.Steps}}
+                    {{if eq $step.State "RUNNING"}}
+                    <div class="wf-node running">
+                    {{else if eq $step.State "SUCCEEDED"}}
+                    <div class="wf-node succeeded">
+                    {{else if eq $step.State "FAILED"}}
+                    <div class="wf-node failed">
+                    {{else}}
+                    <div class="wf-node pending">
+                    {{end}}
+                        <div class="wf-node-icon step-icon-{{$step.Type}}"></div>
+                        <div class="wf-node-body">
+                            <div class="wf-node-name">{{$step.Name}}</div>
+                            <div class="wf-node-type">{{$step.Type}}</div>
+                        </div>
+                        <div class="wf-node-status"></div>
+                    </div>
+                    <div class="wf-connector {{if eq $step.State "SUCCEEDED"}}succeeded{{else if eq $step.State "FAILED"}}failed{{else if eq $step.State "RUNNING"}}running{{end}}"><div class="wf-connector-line"></div></div>
                 {{end}}
-                <div class="detail-label">Duration</div>
-                <div class="detail-value mono">{{duration .Data.Execution.StartTime .Data.Execution.EndTime}}</div>
+                {{else}}
+                <div class="empty" style="padding: 24px 12px;">
+                    <div class="empty-icon">📊</div>
+                    <p>Step history will appear here as the execution runs</p>
+                </div>
+                {{end}}
+
+                <!-- End marker -->
+                {{if eq (printf "%s" .Data.Execution.State) "SUCCEEDED"}}
+                <div class="wf-marker"><div class="wf-marker-dot end-success"></div></div>
+                {{else if eq (printf "%s" .Data.Execution.State) "FAILED"}}
+                <div class="wf-marker"><div class="wf-marker-dot end-fail"></div></div>
+                {{else if eq (printf "%s" .Data.Execution.State) "CANCELLED"}}
+                <div class="wf-marker"><div class="wf-marker-dot end-cancelled"></div></div>
+                {{else}}
+                <div class="wf-marker"><div class="wf-marker-dot end-running"></div></div>
+                {{end}}
             </div>
         </div>
     </div>
-</div>
 
-{{if .Data.Execution.Argument}}
-<div class="section">
-    <div class="card">
-        <div class="card-header">
-            <h2>Arguments</h2>
+    <!-- Right: Details -->
+    <div>
+        <div class="section">
+            <div class="card">
+                <div class="card-header">
+                    <h2>Details</h2>
+                </div>
+                <div class="card-body">
+                    <div class="detail-grid">
+                        <div class="detail-label">Name</div>
+                        <div class="detail-value mono">{{.Data.Execution.Name}}</div>
+                        <div class="detail-label">State</div>
+                        <div class="detail-value"><span class="state {{stateClass (printf "%s" .Data.Execution.State)}}"><span class="state-icon">{{stateIcon (printf "%s" .Data.Execution.State)}}</span> {{.Data.Execution.State}}</span></div>
+                        <div class="detail-label">Workflow</div>
+                        <div class="detail-value"><a href="/ui/workflows/{{.Data.WorkflowID}}" class="wf-link">{{.Data.WorkflowID}}</a></div>
+                        <div class="detail-label">Revision</div>
+                        <div class="detail-value mono">{{.Data.Execution.WorkflowRevisionID}}</div>
+                        <div class="detail-label">Started</div>
+                        <div class="detail-value">{{formatTime .Data.Execution.StartTime}}</div>
+                        {{if not .Data.Execution.EndTime.IsZero}}
+                        <div class="detail-label">Ended</div>
+                        <div class="detail-value">{{formatTime .Data.Execution.EndTime}}</div>
+                        {{end}}
+                        <div class="detail-label">Duration</div>
+                        <div class="detail-value mono">{{duration .Data.Execution.StartTime .Data.Execution.EndTime}}</div>
+                    </div>
+                </div>
+            </div>
         </div>
-        <div class="card-body" style="padding: 0;">
-            <div class="code-block" style="border: none; border-radius: 0; margin: 0;">{{.Data.Execution.Argument}}</div>
-        </div>
-    </div>
-</div>
-{{end}}
 
-{{if .Data.Execution.Result}}
-<div class="section">
-    <div class="card">
-        <div class="card-header">
-            <h2>Result</h2>
+        {{if .Data.Execution.Argument}}
+        <div class="section">
+            <div class="card">
+                <div class="card-header">
+                    <h2>Arguments</h2>
+                </div>
+                <div class="card-body" style="padding: 0;">
+                    <div class="code-block" style="border: none; border-radius: 0; margin: 0;">{{.Data.Execution.Argument}}</div>
+                </div>
+            </div>
         </div>
-        <div class="card-body" style="padding: 0;">
-            <div class="code-block" style="border: none; border-radius: 0; margin: 0;">{{.Data.Execution.Result}}</div>
-        </div>
-    </div>
-</div>
-{{end}}
+        {{end}}
 
-{{if .Data.Execution.Error}}
-<div class="section">
-    <div class="card" style="border-color: rgba(248, 113, 113, 0.3);">
-        <div class="card-header" style="border-color: rgba(248, 113, 113, 0.3);">
-            <h2 style="color: var(--red);">Error</h2>
+        {{if .Data.Execution.Result}}
+        <div class="section">
+            <div class="card">
+                <div class="card-header">
+                    <h2>Result</h2>
+                </div>
+                <div class="card-body" style="padding: 0;">
+                    <div class="code-block" style="border: none; border-radius: 0; margin: 0;">{{.Data.Execution.Result}}</div>
+                </div>
+            </div>
         </div>
-        <div class="card-body" style="padding: 0;">
-            <div class="code-block" style="border: none; border-radius: 0; margin: 0; color: var(--red);">{{.Data.Execution.Error.Payload}}</div>
-        </div>
-        {{if .Data.Execution.Error.Context}}
-        <div class="card-body" style="border-top: 1px solid rgba(248, 113, 113, 0.3); padding-top: 12px;">
-            <div class="detail-grid">
-                <div class="detail-label">Context</div>
-                <div class="detail-value mono">{{.Data.Execution.Error.Context}}</div>
+        {{end}}
+
+        {{if .Data.Execution.Error}}
+        <div class="section">
+            <div class="card" style="border-color: rgba(248, 113, 113, 0.3);">
+                <div class="card-header" style="border-color: rgba(248, 113, 113, 0.3);">
+                    <h2 style="color: var(--red);">Error</h2>
+                </div>
+                <div class="card-body" style="padding: 0;">
+                    <div class="code-block" style="border: none; border-radius: 0; margin: 0; color: var(--red);">{{.Data.Execution.Error.Payload}}</div>
+                </div>
+                {{if .Data.Execution.Error.Context}}
+                <div class="card-body" style="border-top: 1px solid rgba(248, 113, 113, 0.3); padding-top: 12px;">
+                    <div class="detail-grid">
+                        <div class="detail-label">Context</div>
+                        <div class="detail-value mono">{{.Data.Execution.Error.Context}}</div>
+                    </div>
+                </div>
+                {{end}}
             </div>
         </div>
         {{end}}
     </div>
 </div>
-{{end}}
 
 {{if eq (printf "%s" .Data.Execution.State) "ACTIVE"}}
 <script>

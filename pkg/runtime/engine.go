@@ -35,16 +35,21 @@ type StepResult struct {
 	Value     types.Value // return value for FlowReturn
 }
 
+// StepObserver is called when a step starts or finishes execution.
+// It enables external tracking of step execution for visualization.
+type StepObserver func(stepName, stepType, state string)
+
 // Engine executes GCW workflows.
 type Engine struct {
 	workflow *ast.Workflow
 	funcs    FunctionRegistry
 
-	mu        sync.Mutex
-	stepCount int
-	callDepth int
-	cancelled bool
-	cancelCtx context.CancelFunc // set during Execute to allow external cancellation
+	mu           sync.Mutex
+	stepCount    int
+	callDepth    int
+	cancelled    bool
+	cancelCtx    context.CancelFunc // set during Execute to allow external cancellation
+	stepObserver StepObserver       // optional observer for step execution events
 }
 
 // contextKey is an unexported type for context keys defined in this package.
@@ -70,6 +75,18 @@ func NewEngine(workflow *ast.Workflow, funcs FunctionRegistry) *Engine {
 	return &Engine{
 		workflow: workflow,
 		funcs:    funcs,
+	}
+}
+
+// SetStepObserver sets a callback that is invoked when step execution starts or finishes.
+func (e *Engine) SetStepObserver(obs StepObserver) {
+	e.stepObserver = obs
+}
+
+// notifyStep notifies the step observer if set.
+func (e *Engine) notifyStep(stepName, stepType, state string) {
+	if e.stepObserver != nil {
+		e.stepObserver(stepName, stepType, state)
 	}
 }
 
@@ -214,15 +231,24 @@ func (e *Engine) executeSteps(ctx context.Context, steps []*ast.Step, scope *Var
 }
 
 // executeStep runs a single step.
-func (e *Engine) executeStep(ctx context.Context, step *ast.Step, scope *VariableScope) (StepResult, error) {
-	var result StepResult
-	var err error
+func (e *Engine) executeStep(ctx context.Context, step *ast.Step, scope *VariableScope) (result StepResult, retErr error) {
+	// Determine step type for observer
+	stepType := stepTypeString(step)
+	e.notifyStep(step.Name, stepType, "RUNNING")
+
+	defer func() {
+		if retErr != nil {
+			e.notifyStep(step.Name, stepType, "FAILED")
+		} else {
+			e.notifyStep(step.Name, stepType, "SUCCEEDED")
+		}
+	}()
 
 	// Handle nested steps grouping
 	if step.Steps != nil {
-		result, err = e.executeSteps(ctx, step.Steps, scope)
-		if err != nil {
-			return StepResult{}, err
+		result, retErr = e.executeSteps(ctx, step.Steps, scope)
+		if retErr != nil {
+			return StepResult{}, retErr
 		}
 		if result.Flow == FlowReturn || result.Flow == FlowBreak || result.Flow == FlowContinue {
 			return result, nil
@@ -231,25 +257,25 @@ func (e *Engine) executeStep(ctx context.Context, step *ast.Step, scope *Variabl
 
 	// Handle assign step
 	if step.Assign != nil {
-		err = e.executeAssign(ctx, step.Assign, scope)
-		if err != nil {
-			return StepResult{}, err
+		retErr = e.executeAssign(ctx, step.Assign, scope)
+		if retErr != nil {
+			return StepResult{}, retErr
 		}
 	}
 
 	// Handle call step
 	if step.Call != nil {
-		err = e.executeCall(ctx, step.Call, scope)
-		if err != nil {
-			return StepResult{}, err
+		retErr = e.executeCall(ctx, step.Call, scope)
+		if retErr != nil {
+			return StepResult{}, retErr
 		}
 	}
 
 	// Handle switch step
 	if step.Switch != nil {
-		result, err = e.executeSwitch(ctx, step.Switch, scope)
-		if err != nil {
-			return StepResult{}, err
+		result, retErr = e.executeSwitch(ctx, step.Switch, scope)
+		if retErr != nil {
+			return StepResult{}, retErr
 		}
 		if result.Flow != FlowNone {
 			return result, nil
@@ -258,9 +284,9 @@ func (e *Engine) executeStep(ctx context.Context, step *ast.Step, scope *Variabl
 
 	// Handle for loop
 	if step.For != nil {
-		result, err = e.executeFor(ctx, step.For, scope)
-		if err != nil {
-			return StepResult{}, err
+		result, retErr = e.executeFor(ctx, step.For, scope)
+		if retErr != nil {
+			return StepResult{}, retErr
 		}
 		if result.Flow == FlowReturn || result.Flow == FlowEnd {
 			return result, nil
@@ -269,9 +295,9 @@ func (e *Engine) executeStep(ctx context.Context, step *ast.Step, scope *Variabl
 
 	// Handle try/except/retry
 	if step.Try != nil {
-		result, err = e.executeTry(ctx, step.Try, scope)
-		if err != nil {
-			return StepResult{}, err
+		result, retErr = e.executeTry(ctx, step.Try, scope)
+		if retErr != nil {
+			return StepResult{}, retErr
 		}
 		if result.Flow != FlowNone {
 			return result, nil
@@ -280,22 +306,24 @@ func (e *Engine) executeStep(ctx context.Context, step *ast.Step, scope *Variabl
 
 	// Handle parallel
 	if step.Parallel != nil {
-		err = e.executeParallel(ctx, step.Parallel, scope)
-		if err != nil {
-			return StepResult{}, err
+		retErr = e.executeParallel(ctx, step.Parallel, scope)
+		if retErr != nil {
+			return StepResult{}, retErr
 		}
 	}
 
 	// Handle raise
 	if step.Raise != nil {
-		return StepResult{}, e.executeRaise(ctx, step.Raise, scope)
+		retErr = e.executeRaise(ctx, step.Raise, scope)
+		return StepResult{}, retErr
 	}
 
 	// Handle return
 	if step.HasReturn {
-		val, err := EvalValue(ctx, step.Return, scope, e.funcs)
-		if err != nil {
-			return StepResult{}, err
+		val, evalErr := EvalValue(ctx, step.Return, scope, e.funcs)
+		if evalErr != nil {
+			retErr = evalErr
+			return StepResult{}, retErr
 		}
 		return StepResult{Flow: FlowReturn, Value: val}, nil
 	}
@@ -306,6 +334,34 @@ func (e *Engine) executeStep(ctx context.Context, step *ast.Step, scope *Variabl
 	}
 
 	return result, nil
+}
+
+// stepTypeString returns a human-readable step type string for observer.
+func stepTypeString(step *ast.Step) string {
+	switch {
+	case step.Call != nil:
+		return "call"
+	case step.Assign != nil:
+		return "assign"
+	case step.Switch != nil:
+		return "switch"
+	case step.For != nil:
+		return "for"
+	case step.Parallel != nil:
+		return "parallel"
+	case step.Try != nil:
+		return "try"
+	case step.Raise != nil:
+		return "raise"
+	case step.HasReturn:
+		return "return"
+	case step.Steps != nil:
+		return "steps"
+	case step.Next != "":
+		return "next"
+	default:
+		return "unknown"
+	}
 }
 
 // MaxAssignments is the maximum number of assignments per assign step.

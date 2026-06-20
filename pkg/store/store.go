@@ -48,6 +48,16 @@ type Execution struct {
 	StartTime  time.Time      `json:"startTime"`
 	EndTime    time.Time      `json:"endTime,omitempty"`
 	WorkflowRevisionID string `json:"workflowRevisionId"`
+	StepHistory []*StepEntry  `json:"stepHistory,omitempty"`
+}
+
+// StepEntry records a single step execution for diagram visualization.
+type StepEntry struct {
+	Name      string    `json:"name"`
+	Type      string    `json:"type"`
+	State     string    `json:"state"` // "SUCCEEDED", "FAILED", "RUNNING", "PENDING"
+	StartTime time.Time `json:"startTime"`
+	EndTime   time.Time `json:"endTime,omitempty"`
 }
 
 // ExecutionError represents an error in a failed execution.
@@ -345,4 +355,38 @@ func (s *Store) ListCallbacks(executionName string) []*Callback {
 		}
 	}
 	return result
+}
+
+// RecordStep records a step execution event for diagram visualization.
+func (s *Store) RecordStep(execName string, entry *StepEntry) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	exec, ok := s.executions[execName]
+	if !ok {
+		return
+	}
+	exec.StepHistory = append(exec.StepHistory, entry)
+}
+
+// UpdateStepState updates the state and end time of the last step entry with the given name.
+func (s *Store) UpdateStepState(execName, stepName, state string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	exec, ok := s.executions[execName]
+	if !ok {
+		return
+	}
+
+	// Find the last entry with this step name
+	for i := len(exec.StepHistory) - 1; i >= 0; i-- {
+		if exec.StepHistory[i].Name == stepName {
+			exec.StepHistory[i].State = state
+			if state == "SUCCEEDED" || state == "FAILED" {
+				exec.StepHistory[i].EndTime = time.Now()
+			}
+			return
+		}
+	}
 }

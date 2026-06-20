@@ -5,6 +5,7 @@ go 1.25.5
 require (
 	cloud.google.com/go/longrunning v0.8.0
 	cloud.google.com/go/workflows v1.14.3
+	github.com/fsnotify/fsnotify v1.9.0
 	github.com/gofiber/fiber/v2 v2.52.11
 	github.com/spf13/cobra v1.10.2
 	google.golang.org/api v0.265.0
@@ -23,7 +24,6 @@ require (
 	github.com/clipperhouse/stringish v0.1.1 // indirect
 	github.com/clipperhouse/uax29/v2 v2.5.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
-	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect

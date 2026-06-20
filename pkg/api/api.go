@@ -27,9 +27,10 @@ import (
 
 // Server is the API server for the GCW emulator.
 type Server struct {
-	app    *fiber.App
-	store  *store.Store
-	parsed map[string]*ast.Workflow // cached parsed workflows
+	app     *fiber.App
+	store   *store.Store
+	parsed  map[string]*ast.Workflow // cached parsed workflows
+	baseURL string                   // base URL for callback URLs (e.g., http://localhost:8787)
 
 	mu      sync.RWMutex
 	engines map[string]*runtime.Engine      // running execution engines (for cancel)
@@ -37,12 +38,13 @@ type Server struct {
 }
 
 // New creates a new API server.
-func New(s *store.Store) *Server {
+func New(s *store.Store, baseURL string) *Server {
 	srv := &Server{
 		store:   s,
 		parsed:  make(map[string]*ast.Workflow),
 		engines: make(map[string]*runtime.Engine),
 		cancels: make(map[string]context.CancelFunc),
+		baseURL: baseURL,
 	}
 
 	app := fiber.New(fiber.Config{
@@ -66,7 +68,13 @@ func New(s *store.Store) *Server {
 
 	// Callbacks API
 	app.Get("/v1/projects/:project/locations/:location/workflows/:workflow/executions/:execution/callbacks", srv.listCallbacks)
-	app.Post("/callbacks/:id", srv.sendCallback)
+	app.Post("/v1/projects/:project/locations/:location/workflows/:workflow/executions/:execution/callbacks/:callbackId", srv.sendCallback)
+
+	// Step History API (for workflow diagram)
+	app.Get("/v1/projects/:project/locations/:location/workflows/:workflow/executions/:execution/stepHistory", srv.getStepHistory)
+
+	// Legacy callback path for backwards compatibility
+	app.Post("/callbacks/:id", srv.sendCallbackLegacy)
 
 	srv.app = app
 	return srv
@@ -358,7 +366,23 @@ func (s *Server) runExecution(execName string, wfAST *ast.Workflow, args types.V
 	funcs.RegisterWorkflowExecution(&storeAdapter{s.store}, s.parsed, s.childExecutor())
 
 	engine := runtime.NewEngine(wfAST, funcs)
+	engine.SetStepObserver(func(stepName, stepType, state string) {
+		if state == "RUNNING" {
+			s.store.RecordStep(execName, &store.StepEntry{
+				Name:      stepName,
+				Type:      stepType,
+				State:     state,
+				StartTime: time.Now(),
+			})
+		} else {
+			// Update existing entry (SUCCEEDED or FAILED)
+			s.store.UpdateStepState(execName, stepName, state)
+		}
+	})
 	ctx, cancel := context.WithCancel(context.Background())
+
+	// Inject callback context so callback endpoints can generate proper URLs
+	ctx = stdlib.WithCallbackContext(ctx, s.baseURL, execName)
 
 	// Store engine and cancel func for cancellation
 	s.mu.Lock()
@@ -489,15 +513,33 @@ func (s *Server) cancelExecution(c *fiber.Ctx) error {
 
 func (s *Server) listCallbacks(c *fiber.Ctx) error {
 	execName := buildExecutionName(c)
-	callbacks := s.store.ListCallbacks(execName)
 
-	items := make([]fiber.Map, len(callbacks))
-	for i, cb := range callbacks {
-		items[i] = fiber.Map{
-			"name":        cb.Name,
-			"method":      cb.Method,
-			"url":         cb.URL,
-			"createTime":  cb.CreateTime.Format(time.RFC3339),
+	// Get callbacks from both the persistent store and the live callback store
+	storeCallbacks := s.store.ListCallbacks(execName)
+	liveCallbacks := stdlib.GetCallbackStore().ListByExecution(execName)
+
+	// Merge: use live callbacks as the primary source
+	items := make([]fiber.Map, 0)
+	seen := make(map[string]bool)
+
+	for _, cb := range liveCallbacks {
+		items = append(items, fiber.Map{
+			"name":       cb.ID,
+			"method":     cb.Method,
+			"url":        cb.URL,
+			"createTime": cb.CreatedAt.Format(time.RFC3339),
+		})
+		seen[cb.URL] = true
+	}
+
+	for _, cb := range storeCallbacks {
+		if !seen[cb.URL] {
+			items = append(items, fiber.Map{
+				"name":       cb.Name,
+				"method":     cb.Method,
+				"url":        cb.URL,
+				"createTime": cb.CreateTime.Format(time.RFC3339),
+			})
 		}
 	}
 
@@ -507,9 +549,101 @@ func (s *Server) listCallbacks(c *fiber.Ctx) error {
 }
 
 func (s *Server) sendCallback(c *fiber.Ctx) error {
-	// Placeholder for callback handling
+	callbackID := c.Params("callbackId")
+	return s.deliverCallback(c, callbackID)
+}
+
+func (s *Server) sendCallbackLegacy(c *fiber.Ctx) error {
+	callbackID := c.Params("id")
+	return s.deliverCallback(c, callbackID)
+}
+
+func (s *Server) deliverCallback(c *fiber.Ctx, callbackID string) error {
+	// Parse the request body based on Content-Type
+	bodyVal := parseCallbackBody(c.Body(), c.Get("Content-Type"))
+
+	// Build the GCW-style callback request structure
+	headersMap := types.NewOrderedMap()
+	c.Request().Header.VisitAll(func(key, value []byte) {
+		headersMap.Set(strings.ToLower(string(key)), types.NewString(string(value)))
+	})
+
+	httpRequest := types.NewOrderedMap()
+	httpRequest.Set("body", bodyVal)
+	httpRequest.Set("headers", types.NewMap(headersMap))
+	httpRequest.Set("method", types.NewString(c.Method()))
+	httpRequest.Set("query", types.NewString(string(c.Request().URI().QueryString())))
+	httpRequest.Set("url", types.NewString(c.Path()))
+
+	callbackData := types.NewOrderedMap()
+	callbackData.Set("http_request", types.NewMap(httpRequest))
+	callbackData.Set("received_time", types.NewString(time.Now().UTC().Format(time.RFC3339)))
+	callbackData.Set("type", types.NewString("HTTP"))
+
+	err := stdlib.GetCallbackStore().Deliver(callbackID, types.NewMap(callbackData))
+	if err != nil {
+		return c.Status(404).JSON(fiber.Map{
+			"error": fiber.Map{
+				"code":    404,
+				"message": err.Error(),
+				"status":  "NOT_FOUND",
+			},
+		})
+	}
+
 	return c.JSON(fiber.Map{
 		"status": "ok",
+	})
+}
+
+// parseCallbackBody parses callback request body based on content type.
+// JSON content is parsed into typed values; other content types are treated as strings.
+func parseCallbackBody(body []byte, contentType string) types.Value {
+	if len(body) == 0 {
+		return types.Null
+	}
+	if strings.Contains(contentType, "application/json") {
+		var raw interface{}
+		if err := json.Unmarshal(body, &raw); err != nil {
+			log.Printf("[WARN] Callback body declared as JSON but failed to parse: %v", err)
+			return types.NewString(string(body))
+		}
+		return types.ValueFromJSON(raw)
+	}
+	return types.NewString(string(body))
+}
+
+func (s *Server) getStepHistory(c *fiber.Ctx) error {
+	name := buildExecutionName(c)
+
+	exec, err := s.store.GetExecution(name)
+	if err != nil {
+		return c.Status(404).JSON(fiber.Map{
+			"error": fiber.Map{
+				"code":    404,
+				"message": err.Error(),
+				"status":  "NOT_FOUND",
+			},
+		})
+	}
+
+	steps := make([]fiber.Map, 0, len(exec.StepHistory))
+	for _, entry := range exec.StepHistory {
+		step := fiber.Map{
+			"name":      entry.Name,
+			"type":      entry.Type,
+			"state":     entry.State,
+			"startTime": entry.StartTime.Format(time.RFC3339Nano),
+		}
+		if !entry.EndTime.IsZero() {
+			step["endTime"] = entry.EndTime.Format(time.RFC3339Nano)
+		}
+		steps = append(steps, step)
+	}
+
+	return c.JSON(fiber.Map{
+		"steps": steps,
+		"state": exec.State,
 	})
 }
 
