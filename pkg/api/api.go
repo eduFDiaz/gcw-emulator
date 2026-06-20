@@ -70,6 +70,9 @@ func New(s *store.Store, baseURL string) *Server {
 	app.Get("/v1/projects/:project/locations/:location/workflows/:workflow/executions/:execution/callbacks", srv.listCallbacks)
 	app.Post("/v1/projects/:project/locations/:location/workflows/:workflow/executions/:execution/callbacks/:callbackId", srv.sendCallback)
 
+	// Step History API (for workflow diagram)
+	app.Get("/v1/projects/:project/locations/:location/workflows/:workflow/executions/:execution/stepHistory", srv.getStepHistory)
+
 	// Legacy callback path for backwards compatibility
 	app.Post("/callbacks/:id", srv.sendCallbackLegacy)
 
@@ -364,12 +367,17 @@ func (s *Server) runExecution(execName string, wfAST *ast.Workflow, args types.V
 
 	engine := runtime.NewEngine(wfAST, funcs)
 	engine.SetStepObserver(func(stepName, stepType, state string) {
-		s.store.RecordStep(execName, &store.StepEntry{
-			Name:      stepName,
-			Type:      stepType,
-			State:     state,
-			StartTime: time.Now(),
-		})
+		if state == "RUNNING" {
+			s.store.RecordStep(execName, &store.StepEntry{
+				Name:      stepName,
+				Type:      stepType,
+				State:     state,
+				StartTime: time.Now(),
+			})
+		} else {
+			// Update existing entry (SUCCEEDED or FAILED)
+			s.store.UpdateStepState(execName, stepName, state)
+		}
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -598,6 +606,40 @@ func (s *Server) deliverCallback(c *fiber.Ctx, callbackID string) error {
 
 	return c.JSON(fiber.Map{
 		"status": "ok",
+	})
+}
+
+func (s *Server) getStepHistory(c *fiber.Ctx) error {
+	name := buildExecutionName(c)
+
+	exec, err := s.store.GetExecution(name)
+	if err != nil {
+		return c.Status(404).JSON(fiber.Map{
+			"error": fiber.Map{
+				"code":    404,
+				"message": err.Error(),
+				"status":  "NOT_FOUND",
+			},
+		})
+	}
+
+	steps := make([]fiber.Map, 0, len(exec.StepHistory))
+	for _, entry := range exec.StepHistory {
+		step := fiber.Map{
+			"name":      entry.Name,
+			"type":      entry.Type,
+			"state":     entry.State,
+			"startTime": entry.StartTime.Format(time.RFC3339Nano),
+		}
+		if !entry.EndTime.IsZero() {
+			step["endTime"] = entry.EndTime.Format(time.RFC3339Nano)
+		}
+		steps = append(steps, step)
+	}
+
+	return c.JSON(fiber.Map{
+		"steps": steps,
+		"state": exec.State,
 	})
 }
 

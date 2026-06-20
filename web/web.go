@@ -4,6 +4,7 @@ package web
 import (
 	"bytes"
 	"embed"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"sort"
@@ -51,6 +52,7 @@ func New(s *store.Store, project, location string) *Handler {
 			"executionID": executionID,
 			"countLines":  countLines,
 			"hasPrefix":   strings.HasPrefix,
+			"toJSON":      toJSON,
 		},
 	}
 }
@@ -136,6 +138,7 @@ type executionDetailContent struct {
 	Execution  *store.Execution
 	WorkflowID string
 	ExecID     string
+	Steps      []*store.StepEntry
 }
 
 type notFoundContent struct {
@@ -321,11 +324,38 @@ func (h *Handler) executionDetail(c *fiber.Ctx) error {
 		})
 	}
 
+	// Deduplicate steps: keep only the latest entry per step name
+	// This handles for-loops and retries where the same step runs multiple times
+	steps := deduplicateSteps(exec.StepHistory)
+
 	return h.render(c, "execution_detail.html", "workflows", executionDetailContent{
 		Execution:  exec,
 		WorkflowID: wfID,
 		ExecID:     execID,
+		Steps:      steps,
 	})
+}
+
+// deduplicateSteps keeps only the latest entry per step name while preserving order.
+func deduplicateSteps(entries []*store.StepEntry) []*store.StepEntry {
+	if len(entries) == 0 {
+		return entries
+	}
+
+	// Track latest state per step name and maintain insertion order
+	seen := make(map[string]int) // stepName -> index in result
+	var result []*store.StepEntry
+
+	for _, entry := range entries {
+		if idx, exists := seen[entry.Name]; exists {
+			// Update existing entry with latest state
+			result[idx] = entry
+		} else {
+			seen[entry.Name] = len(result)
+			result = append(result, entry)
+		}
+	}
+	return result
 }
 
 // --- Template Helpers ---
@@ -456,4 +486,12 @@ func countLines(s string) int {
 		return 0
 	}
 	return strings.Count(s, "\n") + 1
+}
+
+func toJSON(v interface{}) template.JS {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return template.JS("[]")
+	}
+	return template.JS(b)
 }
