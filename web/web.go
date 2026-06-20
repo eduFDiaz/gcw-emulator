@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"log"
 	"sort"
 	"strings"
 	"time"
@@ -491,6 +492,7 @@ func countLines(s string) int {
 func toJSON(v interface{}) template.JS {
 	b, err := json.Marshal(v)
 	if err != nil {
+		log.Printf("[WARN] toJSON marshaling failed: %v", err)
 		return template.JS("[]")
 	}
 	return template.JS(b)

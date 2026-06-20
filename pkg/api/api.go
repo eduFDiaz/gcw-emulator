@@ -559,21 +559,8 @@ func (s *Server) sendCallbackLegacy(c *fiber.Ctx) error {
 }
 
 func (s *Server) deliverCallback(c *fiber.Ctx, callbackID string) error {
-	// Parse the request body
-	var bodyVal types.Value = types.Null
-	if len(c.Body()) > 0 {
-		contentType := c.Get("Content-Type")
-		if strings.Contains(contentType, "application/json") {
-			var raw interface{}
-			if err := json.Unmarshal(c.Body(), &raw); err == nil {
-				bodyVal = types.ValueFromJSON(raw)
-			} else {
-				bodyVal = types.NewString(string(c.Body()))
-			}
-		} else {
-			bodyVal = types.NewString(string(c.Body()))
-		}
-	}
+	// Parse the request body based on Content-Type
+	bodyVal := parseCallbackBody(c.Body(), c.Get("Content-Type"))
 
 	// Build the GCW-style callback request structure
 	headersMap := types.NewOrderedMap()
@@ -607,6 +594,23 @@ func (s *Server) deliverCallback(c *fiber.Ctx, callbackID string) error {
 	return c.JSON(fiber.Map{
 		"status": "ok",
 	})
+}
+
+// parseCallbackBody parses callback request body based on content type.
+// JSON content is parsed into typed values; other content types are treated as strings.
+func parseCallbackBody(body []byte, contentType string) types.Value {
+	if len(body) == 0 {
+		return types.Null
+	}
+	if strings.Contains(contentType, "application/json") {
+		var raw interface{}
+		if err := json.Unmarshal(body, &raw); err != nil {
+			log.Printf("[WARN] Callback body declared as JSON but failed to parse: %v", err)
+			return types.NewString(string(body))
+		}
+		return types.ValueFromJSON(raw)
+	}
+	return types.NewString(string(body))
 }
 
 func (s *Server) getStepHistory(c *fiber.Ctx) error {
