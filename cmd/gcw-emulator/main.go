@@ -81,7 +81,8 @@ func run(cmd *cobra.Command, args []string) error {
 	grpcAddr := fmt.Sprintf("%s:%s", host, grpcPort)
 
 	s := store.New()
-	server := api.New(s)
+	baseURL := fmt.Sprintf("http://%s", addr)
+	server := api.New(s, baseURL)
 
 	// Load workflows from directory if specified
 	if workflowsDir != "" {
