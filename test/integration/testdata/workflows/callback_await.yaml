@@ -1,0 +1,15 @@
+main:
+  steps:
+    - create_cb:
+        call: events.create_callback_endpoint
+        args:
+          http_callback_method: "POST"
+        result: callback
+    - wait:
+        call: events.await_callback
+        args:
+          callback: ${callback}
+          timeout: 10
+        result: callback_data
+    - done:
+        return: ${callback_data}
